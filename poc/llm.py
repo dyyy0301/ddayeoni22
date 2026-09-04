@@ -1,6 +1,13 @@
 """LLM 호출 wrapper. ANTHROPIC_API_KEY가 있으면 실제 Claude를 호출하고,
 없거나 --mock이 지정되면 결정적인 더미 응답을 돌려줘서 파이프라인 구조를
-API 키 없이도 확인할 수 있게 한다."""
+API 키 없이도 확인할 수 있게 한다.
+
+mock 모드에서는 3개의 시드 아이디어(i1/i2/i3)가 각각 다른 경로를 타도록
+설계해 두었다 (run_poc.py --mock 실행 시 그대로 재현됨):
+  i1 -> 이론이 1라운드에 concede            -> passed    -> 최종 문서화 O
+  i2 -> 디렉터가 1라운드에 concede           -> discarded -> 외부자문/실무 전파 안 됨
+  i3 -> 끝까지 합의 안 됨 (max_rounds 도달)  -> deadlocked -> 실무 verdict no-go로 최종 제외
+"""
 
 import json
 import os
@@ -30,74 +37,116 @@ class LLM:
         )
         return "".join(block.text for block in resp.content if block.type == "text")
 
+    @staticmethod
+    def _idea_id(user: str) -> str:
+        try:
+            data = json.loads(user)
+        except (json.JSONDecodeError, TypeError):
+            return ""
+        return data.get("idea_id") or data.get("idea", {}).get("idea_id", "") or ""
+
     def _mock_response(self, system: str, user: str) -> str:
-        """실제 API 키 없이 파이프라인 흐름을 검증하기 위한 더미 응답.
-        system prompt의 역할별 시그니처 문자열로 분기한다."""
-        if '"stage"' in system or "why_definition" in system:
+        idea_id = self._idea_id(user)
+
+        if "researcher_background" in user and "grounded_in" in system:
             return json.dumps(
                 [
                     {
-                        "stage": "현재_접근",
-                        "type": "why_method",
-                        "question": "[MOCK] 왜 신호 누락 구간을 '복원'의 문제로 정의했는가? "
-                        "복원이 아니라 다른 관측치로부터 위치를 재계산하는 방식은 고려했는가?",
+                        "idea_id": "i1",
+                        "claim": "[MOCK] 개체가 위치를 '계산'하는 것이 아니라, 주변 개체와의 상대 신호"
+                        "농도 교환만으로 집단 전체가 위치 확률장에 수렴하도록 설계해야 한다.",
+                        "grounded_in": "페로몬 농도 기반 분산 탐색 원리",
                     },
                     {
-                        "stage": "비슷한_문제",
-                        "type": "other_field",
-                        "question": "[MOCK] 다른 분야에서는 '부분 관측 상태에서의 상태 추정' 문제를 "
-                        "어떻게 다루는가?",
+                        "idea_id": "i2",
+                        "claim": "[MOCK] 개별 노드는 자기 위치를 절대 알 필요가 없고, 집단의 상대 위상"
+                        "구조만 유지하면 된다.",
+                        "grounded_in": "군집의 상대 위상 유지 메커니즘",
+                    },
+                    {
+                        "idea_id": "i3",
+                        "claim": "[MOCK] 신호가 강한 개체가 약한 개체를 대신해 위치를 대리 발신하는 "
+                        "'대리 관측' 구조를 표준 측위 알고리즘에 편입해야 한다.",
+                        "grounded_in": "역할 분담형 정보 중계 구조",
                     },
                 ],
                 ensure_ascii=False,
             )
-        if "탕아" in system and "origin_question" in system:
+
+        if '"stance": "reject"' in system:
+            if idea_id == "i1":
+                return json.dumps(
+                    {"stance": "concede", "argument": "[MOCK] 상대 신호 농도만으로 확률장을 수렴시키는 "
+                     "방식은 실제로 협력 측위(cooperative positioning)의 분산 추정 이론으로 이미 "
+                     "정당화된다. 더 반박할 논리가 없다."},
+                    ensure_ascii=False,
+                )
             return json.dumps(
-                [
-                    {
-                        "title": "[MOCK] 신호 복원 대신 보조 센서 퓨전으로 위치 직접 재계산",
-                        "origin_question": "왜 신호 누락 구간을 '복원'의 문제로 정의했는가?",
-                        "source": "both",
-                        "direction": "GNSS 음영 구간에서 신호를 복원하려 하지 말고, IMU/기압계 등 "
-                        "보조 센서를 결합한 관측 벡터 확장으로 위치를 직접 추정한다. "
-                        "전문가가 지적한 observation geometry 제약은 여전히 유효하므로, "
-                        "관측 가능성 조건을 만족하는 최소 센서 조합을 먼저 규명하는 것을 "
-                        "선행 과제로 삼는다.",
-                    }
-                ],
+                {"stance": "reject", "argument": "[MOCK] observation geometry 제약상 상대 위상만으로는 "
+                 "절대 좌표계로의 변환이 불확정(under-determined)해진다. 최소 하나의 절대 기준점 없이는 "
+                 "이론적으로 성립하지 않는다."},
                 ensure_ascii=False,
             )
-        if "탈도메인화" in system:
-            return (
-                "[탈도메인화] (MOCK) 부분 관측 상태에서의 결측치 보간 및 상태 추정\n"
-                "[후보 도메인] (MOCK) 1) 로보틱스의 센서 퓨전(칼만 필터 계열) "
-                "2) 생태학의 개체수 결측 구간 추정 3) 심리학 FACS의 부분 표정 정보로부터 "
-                "전체 정서 상태 추론\n"
-                "[이식 제안] (MOCK) 신호 자체를 복원하지 말고, 다른 관측 채널(가속도계, "
-                "기압계 등)을 이용한 센서 퓨전으로 위치를 직접 재계산하는 방식을 제안.\n"
-                "[검증 필요] (MOCK) 해당 센서 퓨전 기법이 실제 GNSS 음영 구간 데이터에서도 "
-                "관측 가능성을 만족하는지 확인 필요."
+
+        if '"stance": "counter"' in system:
+            if idea_id == "i2":
+                return json.dumps(
+                    {"stance": "concede", "argument": "[MOCK] 절대 기준점 없이는 불확정하다는 지적이 "
+                     "맞다. 이 형태로는 더 밀어붙일 논리가 없다."},
+                    ensure_ascii=False,
+                )
+            return json.dumps(
+                {
+                    "stance": "counter",
+                    "claim": "[MOCK] 대리 발신 개체 중 최소 1개만 절대 기준(GNSS 앵커)을 유지하고, "
+                    "나머지는 신호 중계만 담당하는 하이브리드 구조로 좁힌다.",
+                    "argument": "[MOCK] 불확정성 문제는 전원이 상대 위상만 쓸 때의 얘기고, 앵커 1개를 "
+                    "고정하면 나머지 개체는 신호 강도가 약해도 대리 중계로 관측 가능성을 유지할 수 있다.",
+                },
+                ensure_ascii=False,
             )
-        if "observation geometry" in system or "전문가" in system:
+
+        if "[기존 유사 사례 유무]" in system:
             return (
-                "[MOCK] 현재 PNT 구조에서는 observation geometry 제약 때문에 위성 신호 수가 "
-                "부족한 구간에서는 위치 계산 방식을 바꿔도 근본적인 관측 가능성(observability) "
-                "문제는 해결되지 않는다. 다만 보조 센서를 결합해 관측 벡터를 확장하는 조건부 "
-                "완화는 가능하다."
+                f"[MOCK idea_id={idea_id}] "
+                "[기존 유사 사례 유무] 로보틱스의 협력 측위(cooperative localization)와 구조적으로 "
+                "유사하지만, '신호 강한 개체가 약한 개체를 대리 발신'하는 역할 분담 구조는 표준 "
+                "협력 측위 문헌에서 명시적으로 다루지 않는다.\n"
+                "[참신성 판단] 참신함은 '중계 자체를 관측치로 취급'하는 지점에 있다.\n"
+                "[보강 제안] 통신 이론의 relay channel 모델을 결합하면 중계 신호의 신뢰도를 "
+                "정량화할 수 있다.\n"
+                "[검증 필요] relay 개체의 위치 오차가 대리 관측 정확도에 미치는 영향 분석 필요."
             )
+
         if '"verdict"' in system:
+            if idea_id == "i3":
+                return json.dumps(
+                    {
+                        "data": "unavailable",
+                        "benchmark": "unavailable",
+                        "implementation_time": "3w",
+                        "evaluation_metric": "partial",
+                        "domain_dependency": "high",
+                        "risk": "high",
+                        "verdict": "no-go",
+                        "reasoning": "[MOCK] 대리 관측 구조를 검증할 실측 데이터/벤치마크가 없고, "
+                        "20라운드 넘게 이론과 합의도 안 됐다. 지금 단계에서 착수하기엔 리스크가 크다.",
+                    },
+                    ensure_ascii=False,
+                )
             return json.dumps(
                 {
                     "data": "partial",
                     "benchmark": "available",
                     "implementation_time": "8h",
                     "evaluation_metric": "available",
-                    "domain_dependency": "high",
+                    "domain_dependency": "medium",
                     "risk": "medium",
-                    "verdict": "conditional",
-                    "reasoning": "[MOCK] 센서 퓨전 이식 자체는 표준 기법이라 구현 부담은 낮지만, "
-                    "실측 데이터 확보 여부에 따라 조건부.",
+                    "verdict": "go",
+                    "reasoning": "[MOCK] 협력 측위 이론과 시뮬레이션 벤치마크가 이미 있어 착수 부담이 "
+                    "낮다.",
                 },
                 ensure_ascii=False,
             )
+
         return "[MOCK] response"

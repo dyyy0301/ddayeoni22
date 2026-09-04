@@ -1,12 +1,13 @@
-"""1번 탕아 에이전트를 핵심으로 하는 파이프라인.
+"""디렉터-이론 논쟁 루프 파이프라인 (v2).
 
-흐름:
-  1) Agent1: path_dependency를 보고 도발적 질문들을 생성 (JSON, type 태깅됨)
-  2) 라우팅: type에 따라 질문을 Agent2(전문가) 또는 Agent3(모르긴 몰라도)로 전달
-     - why_definition / why_method / variable_doubt -> Agent2 (정식 이론 반박)
-     - inversion / other_field                       -> Agent3 (타 분야 유추)
-  3) Agent1: 반박/유추 결과를 종합해 살아남은 연구 방향 후보를 정리
-  4) Agent4: 각 후보를 feasibility config로 평가
+  0) 디렉터가 grounding_text를 보고 완전히 낯선 주장(seed idea) 여러 개를 던짐
+  1) 주장마다 이론 <-> 디렉터 논쟁 루프
+       - 이론이 물러나면      -> passed
+       - 디렉터가 물러나면    -> discarded  (여기서 폐기, 전파 안 됨)
+       - max_rounds 도달      -> deadlocked
+  2) passed / deadlocked만 외부자문 + 실무·보조 에이전트로 전파
+  3) 실무·보조가 no-go 준 것도 최종 문서에서 제외
+  4) 최종적으로 살아남은 것만 "문서화" 대상
 """
 
 import json
@@ -14,15 +15,14 @@ from dataclasses import dataclass, field
 
 from llm import LLM
 from prompts import (
-    AGENT1_SYSTEM,
-    AGENT1_SYNTHESIZE_SYSTEM,
-    AGENT2_SYSTEM,
-    AGENT3_SYSTEM,
-    AGENT4_SYSTEM,
+    DIRECTOR_SEED_SYSTEM,
+    THEORY_SYSTEM,
+    DIRECTOR_DEBATE_SYSTEM,
+    EXTERNAL_ADVISOR_SYSTEM,
+    PRACTICAL_SYSTEM,
 )
 
-ROUTE_TO_AGENT2 = {"why_definition", "why_method", "variable_doubt"}
-ROUTE_TO_AGENT3 = {"inversion", "other_field"}
+DEFAULT_MAX_ROUNDS = 20
 
 
 def _parse_json_array(text: str):
@@ -42,95 +42,178 @@ def _parse_json_object(text: str):
 
 
 @dataclass
+class DebateResult:
+    idea_id: str
+    seed_claim: str
+    grounded_in: str
+    final_claim: str
+    outcome: str  # passed | discarded | deadlocked
+    round_count: int
+    rounds: list = field(default_factory=list)
+
+
+@dataclass
 class RunResult:
-    challenges: list = field(default_factory=list)
-    advisor_responses: list = field(default_factory=list)
-    directions: list = field(default_factory=list)
-    evaluations: list = field(default_factory=list)
+    seeds: list = field(default_factory=list)
+    debates: list = field(default_factory=list)  # DebateResult
+    escalations: list = field(default_factory=list)  # {"debate", "advisor", "practical"}
+    documented: list = field(default_factory=list)  # subset of escalations that passed practical gate
 
 
-def run_pipeline(problem: dict, llm: LLM) -> RunResult:
-    result = RunResult()
-
-    # 1) Agent1 - 질문 생성
+def generate_seed_ideas(problem: dict, llm: LLM) -> list:
     user_input = json.dumps(problem, ensure_ascii=False, indent=2)
-    raw_challenges = llm.complete(AGENT1_SYSTEM, user_input, temperature=0.7)
-    challenges = _parse_json_array(raw_challenges)
-    result.challenges = challenges
+    raw = llm.complete(DIRECTOR_SEED_SYSTEM, user_input, temperature=0.9)
+    return _parse_json_array(raw)
 
-    # 2) 라우팅 -> Agent2 / Agent3
-    for ch in challenges:
-        qtype = ch.get("type")
-        question_ctx = json.dumps(
-            {"problem": problem, "question": ch}, ensure_ascii=False, indent=2
-        )
-        if qtype in ROUTE_TO_AGENT2:
-            answer = llm.complete(AGENT2_SYSTEM, question_ctx, temperature=0.25)
-            advisor = "agent2_expert"
-        elif qtype in ROUTE_TO_AGENT3:
-            answer = llm.complete(AGENT3_SYSTEM, question_ctx, temperature=0.9)
-            advisor = "agent3_cross_domain"
-        else:
-            # 알 수 없는 type은 둘 다에게 물어 안전하게 처리
-            answer = llm.complete(AGENT2_SYSTEM, question_ctx, temperature=0.25)
-            advisor = "agent2_expert"
-        result.advisor_responses.append(
-            {"question": ch, "advisor": advisor, "answer": answer}
-        )
 
-    # 3) Agent1 - 종합
-    synth_input = json.dumps(
-        {"problem": problem, "advisor_responses": result.advisor_responses},
+def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateResult:
+    history = []
+    current_claim = idea["claim"]
+
+    for round_num in range(1, max_rounds + 1):
+        theory_ctx = json.dumps(
+            {
+                "problem": problem,
+                "idea_id": idea["idea_id"],
+                "current_claim": current_claim,
+                "history": history,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        theory_resp = _parse_json_object(llm.complete(THEORY_SYSTEM, theory_ctx, temperature=0.2))
+        history.append({"round": round_num, "role": "theory", **theory_resp})
+
+        if theory_resp["stance"] == "concede":
+            return DebateResult(
+                idea_id=idea["idea_id"],
+                seed_claim=idea["claim"],
+                grounded_in=idea.get("grounded_in", ""),
+                final_claim=current_claim,
+                outcome="passed",
+                round_count=round_num,
+                rounds=history,
+            )
+
+        director_ctx = json.dumps(
+            {
+                "problem": problem,
+                "idea_id": idea["idea_id"],
+                "current_claim": current_claim,
+                "theory_argument": theory_resp["argument"],
+                "history": history,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        director_resp = _parse_json_object(
+            llm.complete(DIRECTOR_DEBATE_SYSTEM, director_ctx, temperature=0.8)
+        )
+        history.append({"round": round_num, "role": "director", **director_resp})
+
+        if director_resp["stance"] == "concede":
+            return DebateResult(
+                idea_id=idea["idea_id"],
+                seed_claim=idea["claim"],
+                grounded_in=idea.get("grounded_in", ""),
+                final_claim=current_claim,
+                outcome="discarded",
+                round_count=round_num,
+                rounds=history,
+            )
+
+        current_claim = director_resp.get("claim", current_claim)
+
+    return DebateResult(
+        idea_id=idea["idea_id"],
+        seed_claim=idea["claim"],
+        grounded_in=idea.get("grounded_in", ""),
+        final_claim=current_claim,
+        outcome="deadlocked",
+        round_count=max_rounds,
+        rounds=history,
+    )
+
+
+def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
+    ctx = json.dumps(
+        {
+            "problem": problem,
+            "idea_id": debate.idea_id,
+            "final_claim": debate.final_claim,
+            "outcome": debate.outcome,
+            "round_count": debate.round_count,
+        },
         ensure_ascii=False,
         indent=2,
     )
-    raw_directions = llm.complete(AGENT1_SYNTHESIZE_SYSTEM, synth_input, temperature=0.6)
-    result.directions = _parse_json_array(raw_directions)
+    advisor = llm.complete(EXTERNAL_ADVISOR_SYSTEM, ctx, temperature=0.8)
+    practical = _parse_json_object(llm.complete(PRACTICAL_SYSTEM, ctx, temperature=0.2))
+    return {"debate": debate, "advisor": advisor, "practical": practical}
 
-    # 4) Agent4 - feasibility 평가
-    for d in result.directions:
-        eval_input = json.dumps({"problem": problem, "direction": d}, ensure_ascii=False, indent=2)
-        raw_eval = llm.complete(AGENT4_SYSTEM, eval_input, temperature=0.2)
-        evaluation = _parse_json_object(raw_eval)
-        result.evaluations.append({"direction": d, "evaluation": evaluation})
+
+def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) -> RunResult:
+    result = RunResult()
+
+    seeds = generate_seed_ideas(problem, llm)
+    result.seeds = seeds
+
+    for seed in seeds:
+        debate = run_debate(seed, problem, llm, max_rounds)
+        result.debates.append(debate)
+
+    for debate in result.debates:
+        if debate.outcome in ("passed", "deadlocked"):
+            escalation = escalate(debate, problem, llm)
+            result.escalations.append(escalation)
+            if escalation["practical"]["verdict"] != "no-go":
+                result.documented.append(escalation)
 
     return result
 
 
-def to_markdown(problem: dict, result: RunResult) -> str:
+def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
     lines = []
-    lines.append(f"# PoC 실행 결과: {problem.get('problem_domain', '')}\n")
-    lines.append(f"**현재 접근**: {problem.get('current_approach', '')}\n")
+    lines.append(f"# 연구 주제 탐색 PoC: {problem.get('target_domain', '')}\n")
+    lines.append(f"**연구자 배경(회피 대상)**: {problem.get('researcher_background', '')}")
+    lines.append(f"**최대 논쟁 라운드**: {max_rounds}\n")
 
-    lines.append("## 1. 탕아(Agent1)가 던진 질문\n")
-    for ch in result.challenges:
-        lines.append(f"- `[{ch.get('stage')}/{ch.get('type')}]` {ch.get('question')}")
+    lines.append("## 0. 디렉터가 던진 시드 아이디어\n")
+    for s in result.seeds:
+        lines.append(f"- `[{s['idea_id']}]` {s['claim']} *(근거: {s.get('grounded_in', '')})*")
     lines.append("")
 
-    lines.append("## 2. 외부 자문 응답\n")
-    for r in result.advisor_responses:
-        q = r["question"]
-        lines.append(f"### Q. {q.get('question')}")
-        lines.append(f"*(라우팅: {r['advisor']})*\n")
-        lines.append(r["answer"])
-        lines.append("")
+    lines.append("## 1. 논쟁 결과 요약\n")
+    lines.append("| idea_id | outcome | rounds | final_claim |")
+    lines.append("|---|---|---|---|")
+    for d in result.debates:
+        lines.append(f"| {d.idea_id} | {d.outcome} | {d.round_count} | {d.final_claim} |")
+    lines.append("")
 
-    lines.append("## 3. 종합된 후보 연구 방향 (Agent1)\n")
-    for d in result.directions:
-        lines.append(f"### {d.get('title')}")
-        lines.append(f"- 근거 질문: {d.get('origin_question')}")
-        lines.append(f"- 출처: {d.get('source')}")
-        lines.append(f"- 방향: {d.get('direction')}")
-        lines.append("")
-
-    lines.append("## 4. 실현 가능성 평가 (Agent4)\n")
-    for e in result.evaluations:
-        title = e["direction"].get("title")
-        ev = e["evaluation"]
-        lines.append(f"### {title}")
+    lines.append("## 2. 최종 문서화 (통과된 아이디어만)\n")
+    if not result.documented:
+        lines.append("*이번 실행에서는 최종 문서화 기준을 통과한 아이디어가 없음.*\n")
+    for e in result.documented:
+        d = e["debate"]
+        lines.append(f"### [{d.idea_id}] {d.final_claim}")
+        lines.append(f"- 논쟁 결과: {d.outcome} ({d.round_count}라운드)")
+        lines.append(f"- 외부 자문:\n\n{e['advisor']}\n")
+        lines.append("- 실무·보조 평가:")
         lines.append("```json")
-        lines.append(json.dumps(ev, ensure_ascii=False, indent=2))
+        lines.append(json.dumps(e["practical"], ensure_ascii=False, indent=2))
         lines.append("```")
         lines.append("")
+
+    lines.append("---\n")
+    lines.append("## 내부 트레이스 (비공식, 문서화 대상 아님)\n")
+    lines.append("*아래는 폐기(discarded)되었거나 실무 단계에서 탈락(no-go)한 항목의 기록. "
+                  "디버깅용이며 최종 산출물에는 포함되지 않음.*\n")
+    documented_ids = {e["debate"].idea_id for e in result.documented}
+    for d in result.debates:
+        if d.idea_id in documented_ids:
+            continue
+        reason = "discarded (디렉터가 물러남)" if d.outcome == "discarded" else "실무 단계 no-go"
+        lines.append(f"- `[{d.idea_id}]` {reason} / 최종 주장: {d.final_claim}")
+    lines.append("")
 
     return "\n".join(lines)
