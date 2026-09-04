@@ -2,11 +2,12 @@
 없거나 --mock이 지정되면 결정적인 더미 응답을 돌려줘서 파이프라인 구조를
 API 키 없이도 확인할 수 있게 한다.
 
-mock 모드에서는 3개의 시드 아이디어(i1/i2/i3)가 각각 다른 경로를 타도록
-설계해 두었다 (run_poc.py --mock 실행 시 그대로 재현됨):
-  i1 -> 이론이 1라운드에 concede            -> passed    -> 최종 문서화 O
-  i2 -> 디렉터가 1라운드에 concede           -> discarded -> 외부자문/실무 전파 안 됨
-  i3 -> 끝까지 합의 안 됨 (max_rounds 도달)  -> deadlocked -> 실무 verdict no-go로 최종 제외
+mock 모드에서는 3개의 시드 아이디어(i1/i2/i3)가 디렉터의 3가지 도발 전술
+(tactic)을 하나씩 대표하고, 각각 다른 경로를 타도록 설계해 두었다
+(run_poc.py --mock 실행 시 그대로 재현됨):
+  i1 (free_from_evidence)      -> 이론이 1라운드에 concede  -> passed    -> 최종 문서화 O
+  i2 (naive_assumption_attack) -> 디렉터가 1라운드에 concede -> discarded -> 외부자문/실무 전파 안 됨
+  i3 (extreme_stress_test)     -> 끝까지 합의 안 됨(max_rounds) -> deadlocked -> 실무 verdict no-go로 최종 제외
 """
 
 import json
@@ -53,21 +54,27 @@ class LLM:
                 [
                     {
                         "idea_id": "i1",
-                        "claim": "[MOCK] 개체가 위치를 '계산'하는 것이 아니라, 주변 개체와의 상대 신호"
-                        "농도 교환만으로 집단 전체가 위치 확률장에 수렴하도록 설계해야 한다.",
+                        "tactic": "free_from_evidence",
+                        "claim": "[MOCK] '위치 계산'이라는 개념 자체를 폐기해야 한다. 개체는 절대 좌표를 "
+                        "따질 필요 없이, 순전히 이웃과의 국소 신호 강도 비교만으로 목적 상태에 "
+                        "수렴하는 시스템이면 충분하다.",
                         "grounded_in": "페로몬 농도 기반 분산 탐색 원리",
                     },
                     {
                         "idea_id": "i2",
-                        "claim": "[MOCK] 개별 노드는 자기 위치를 절대 알 필요가 없고, 집단의 상대 위상"
-                        "구조만 유지하면 된다.",
-                        "grounded_in": "군집의 상대 위상 유지 메커니즘",
+                        "tactic": "naive_assumption_attack",
+                        "claim": "[MOCK] 이 이론은 '신호를 중계하는 개체가 항상 정직하게 신호를 전달한다'는 "
+                        "순진한 가정을 깔고 있다. 신호가 강한 개체가 거짓 신호를 흘려도 걸러낼 방법이 "
+                        "전혀 없다는 걸 아무도 지적하지 않는다.",
+                        "grounded_in": "역할 분담형 정보 중계 구조",
                     },
                     {
                         "idea_id": "i3",
-                        "claim": "[MOCK] 신호가 강한 개체가 약한 개체를 대신해 위치를 대리 발신하는 "
-                        "'대리 관측' 구조를 표준 측위 알고리즘에 편입해야 한다.",
-                        "grounded_in": "역할 분담형 정보 중계 구조",
+                        "tactic": "extreme_stress_test",
+                        "claim": "[MOCK] 중계 개체 수가 100배로 폭증해서 신호가 완전히 뒤섞이는 극한 "
+                        "상황이 오면, 국소 신호 구배 자체가 노이즈에 파묻혀 이 이론은 통째로 무너진다. "
+                        "그런데 교과서는 그런 상황을 단 한 줄도 언급하지 않는다.",
+                        "grounded_in": "군집의 상대 위상 유지 메커니즘",
                     },
                 ],
                 ensure_ascii=False,
@@ -76,46 +83,84 @@ class LLM:
         if '"stance": "reject"' in system:
             if idea_id == "i1":
                 return json.dumps(
-                    {"stance": "concede", "argument": "[MOCK] 상대 신호 농도만으로 확률장을 수렴시키는 "
-                     "방식은 실제로 협력 측위(cooperative positioning)의 분산 추정 이론으로 이미 "
-                     "정당화된다. 더 반박할 논리가 없다."},
+                    {"stance": "concede", "argument": "[MOCK] 절대 좌표 없이 국소 신호 비교만으로 "
+                     "수렴시키는 방식은 실제로 협력 측위(cooperative positioning)의 분산 추정 이론으로 "
+                     "이미 정당화된다. 더 반박할 논리가 없다."},
+                    ensure_ascii=False,
+                )
+            if idea_id == "i2":
+                return json.dumps(
+                    {"stance": "reject", "argument": "[MOCK] '거를 방법이 전혀 없다'는 전제 자체가 "
+                     "틀렸다. 표준 협력 네트워크 이론에는 이미 신뢰도 가중 합의(trust-weighted "
+                     "consensus) 메커니즘이 정식화되어 있어 거짓 신호를 통계적으로 감쇠시킨다."},
                     ensure_ascii=False,
                 )
             return json.dumps(
-                {"stance": "reject", "argument": "[MOCK] observation geometry 제약상 상대 위상만으로는 "
-                 "절대 좌표계로의 변환이 불확정(under-determined)해진다. 최소 하나의 절대 기준점 없이는 "
-                 "이론적으로 성립하지 않는다."},
+                {"stance": "reject", "argument": "[MOCK] 중계 개체 수가 아무리 늘어나도, 신호대잡음비만 "
+                 "충분하면 중심극한정리에 의해 노이즈는 평균화되어 국소 구배는 복원 가능하다. "
+                 "붕괴한다는 주장은 근거가 없다."},
                 ensure_ascii=False,
             )
 
         if '"stance": "counter"' in system:
             if idea_id == "i2":
                 return json.dumps(
-                    {"stance": "concede", "argument": "[MOCK] 절대 기준점 없이는 불확정하다는 지적이 "
-                     "맞다. 이 형태로는 더 밀어붙일 논리가 없다."},
+                    {"stance": "concede", "argument": "[MOCK] trust-weighted consensus로 이미 다뤄진다는 "
+                     "지적이 맞다. 이 형태로는 더 밀어붙일 논리가 없다."},
                     ensure_ascii=False,
                 )
             return json.dumps(
                 {
                     "stance": "counter",
-                    "claim": "[MOCK] 대리 발신 개체 중 최소 1개만 절대 기준(GNSS 앵커)을 유지하고, "
-                    "나머지는 신호 중계만 담당하는 하이브리드 구조로 좁힌다.",
-                    "argument": "[MOCK] 불확정성 문제는 전원이 상대 위상만 쓸 때의 얘기고, 앵커 1개를 "
-                    "고정하면 나머지 개체는 신호 강도가 약해도 대리 중계로 관측 가능성을 유지할 수 있다.",
+                    "claim": "[MOCK] 노이즈가 서로 독립적일 때만 평균화가 성립한다. 중계 개체들이 "
+                    "서로의 신호에 다시 반응하는 상관 잡음(correlated noise) 상황으로 조건을 좁히면 "
+                    "중심극한정리가 성립하지 않는다.",
+                    "argument": "[MOCK] '충분한 SNR'이라는 전제 역시 중계 밀도가 커질수록 상관 구조가 "
+                    "생긴다는 걸 무시한 편의적 가정이다.",
                 },
                 ensure_ascii=False,
             )
 
         if "[기존 유사 사례 유무]" in system:
+            if idea_id == "i1":
+                return (
+                    "[MOCK idea_id=i1]\n"
+                    "[탈도메인화] 전역 좌표 없이 국소 신호 강도 비교만으로 목적 상태에 수렴하는 "
+                    "분산 합의 문제.\n"
+                    "[후보 전공 목록] 1) 물리학 - 통계역학의 스핀 정렬(이징 모델) "
+                    "2) 사회학 - 사회연결망의 여론 수렴(threshold consensus dynamics) "
+                    "3) 생물학 - 새떼의 군집 비행(flocking) 규칙.\n"
+                    "[선택된 전공] 사회학(여론 동역학) - 개체 간 국소 상호작용만으로 전역 합의가 "
+                    "나타나는 조건(문턱값, 연결 밀도)이 이미 정량화되어 있어, 수렴 조건을 그대로 "
+                    "빌려올 수 있기 때문.\n"
+                    "[기존 유사 사례 유무] 로보틱스의 flocking/swarm consensus와 개념적으로 유사하지만, "
+                    "사회연결망의 '문턱값 모델(threshold model)'을 측위 문제에 명시적으로 적용한 "
+                    "사례는 드물다.\n"
+                    "[참신성 판단] 참신함은 '합의 조건'을 위치 문제가 아니라 여론 확산 문제의 언어로 "
+                    "재정의하는 지점에 있다. [검증 필요: 문턱값 모델의 수렴 속도가 실시간 측위 "
+                    "요구조건을 만족하는지]\n"
+                    "[보강 제안] 여론 동역학의 '연결 밀도 임계값' 공식을 가져와, 최소 몇 개체가 "
+                    "연결되어야 확률장이 수렴하는지 사전 계산할 수 있다. "
+                    "[검증 필요: 실제 통신 반경/밀도 데이터로 임계값 검증]"
+                )
             return (
-                f"[MOCK idea_id={idea_id}] "
-                "[기존 유사 사례 유무] 로보틱스의 협력 측위(cooperative localization)와 구조적으로 "
-                "유사하지만, '신호 강한 개체가 약한 개체를 대리 발신'하는 역할 분담 구조는 표준 "
-                "협력 측위 문헌에서 명시적으로 다루지 않는다.\n"
-                "[참신성 판단] 참신함은 '중계 자체를 관측치로 취급'하는 지점에 있다.\n"
-                "[보강 제안] 통신 이론의 relay channel 모델을 결합하면 중계 신호의 신뢰도를 "
-                "정량화할 수 있다.\n"
-                "[검증 필요] relay 개체의 위치 오차가 대리 관측 정확도에 미치는 영향 분석 필요."
+                "[MOCK idea_id=i3]\n"
+                "[탈도메인화] 중계 노드 수 증가에 따른 상관 잡음 누적이 신호 복원 가능성을 붕괴시키는 "
+                "문제.\n"
+                "[후보 전공 목록] 1) 통신공학 - 다중경로 페이딩과 중계망 용량 이론 "
+                "2) 생태학 - 개체군 밀도 증가에 따른 자원 경쟁/혼잡 효과 "
+                "3) 언어학 - 다자간 대화에서 화자 수 증가에 따른 정보 손실(오버랩/노이즈).\n"
+                "[선택된 전공] 통신공학(중계망 용량 이론) - 상관 잡음 하에서의 용량 한계가 이미 "
+                "정식화(correlated relay channel capacity)되어 있어 붕괴 조건을 정량적으로 도출할 "
+                "수 있기 때문.\n"
+                "[기존 유사 사례 유무] 무선 중계망의 상관 페이딩 채널 용량 연구와 구조적으로 거의 "
+                "동일하다. 다만 '생물학적 군집'을 이 프레임으로 재해석한 사례는 없다.\n"
+                "[참신성 판단] 참신함은 통신 이론의 채널 용량 공식을 생물학적 군집 붕괴 조건에 "
+                "그대로 대입해보는 지점에 있다. [검증 필요: 실제 상관계수 추정치가 이론값과 "
+                "맞는지]\n"
+                "[보강 제안] 상관 relay channel의 capacity outage probability 공식을 가져와, "
+                "중계 밀도의 임계 붕괴점을 사전에 계산할 수 있다. "
+                "[검증 필요: 시뮬레이션으로 임계 밀도 산출 후 실측 비교]"
             )
 
         if '"verdict"' in system:
@@ -129,7 +174,7 @@ class LLM:
                         "domain_dependency": "high",
                         "risk": "high",
                         "verdict": "no-go",
-                        "reasoning": "[MOCK] 대리 관측 구조를 검증할 실측 데이터/벤치마크가 없고, "
+                        "reasoning": "[MOCK] 상관 잡음 붕괴 조건을 검증할 실측 데이터/벤치마크가 없고, "
                         "20라운드 넘게 이론과 합의도 안 됐다. 지금 단계에서 착수하기엔 리스크가 크다.",
                     },
                     ensure_ascii=False,
@@ -143,8 +188,8 @@ class LLM:
                     "domain_dependency": "medium",
                     "risk": "medium",
                     "verdict": "go",
-                    "reasoning": "[MOCK] 협력 측위 이론과 시뮬레이션 벤치마크가 이미 있어 착수 부담이 "
-                    "낮다.",
+                    "reasoning": "[MOCK] 협력 측위 이론과 여론 동역학 시뮬레이션 벤치마크가 이미 있어 "
+                    "착수 부담이 낮다.",
                 },
                 ensure_ascii=False,
             )

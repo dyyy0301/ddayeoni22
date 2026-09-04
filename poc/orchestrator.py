@@ -44,6 +44,7 @@ def _parse_json_object(text: str):
 @dataclass
 class DebateResult:
     idea_id: str
+    tactic: str
     seed_claim: str
     grounded_in: str
     final_claim: str
@@ -87,6 +88,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
         if theory_resp["stance"] == "concede":
             return DebateResult(
                 idea_id=idea["idea_id"],
+                tactic=idea.get("tactic", ""),
                 seed_claim=idea["claim"],
                 grounded_in=idea.get("grounded_in", ""),
                 final_claim=current_claim,
@@ -114,6 +116,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
         if director_resp["stance"] == "concede":
             return DebateResult(
                 idea_id=idea["idea_id"],
+                tactic=idea.get("tactic", ""),
                 seed_claim=idea["claim"],
                 grounded_in=idea.get("grounded_in", ""),
                 final_claim=current_claim,
@@ -126,6 +129,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
 
     return DebateResult(
         idea_id=idea["idea_id"],
+        tactic=idea.get("tactic", ""),
         seed_claim=idea["claim"],
         grounded_in=idea.get("grounded_in", ""),
         final_claim=current_claim,
@@ -180,14 +184,17 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
 
     lines.append("## 0. 디렉터가 던진 시드 아이디어\n")
     for s in result.seeds:
-        lines.append(f"- `[{s['idea_id']}]` {s['claim']} *(근거: {s.get('grounded_in', '')})*")
+        lines.append(
+            f"- `[{s['idea_id']}/{s.get('tactic', '')}]` {s['claim']} "
+            f"*(물어뜯은 지점: {s.get('grounded_in', '')})*"
+        )
     lines.append("")
 
     lines.append("## 1. 논쟁 결과 요약\n")
-    lines.append("| idea_id | outcome | rounds | final_claim |")
-    lines.append("|---|---|---|---|")
+    lines.append("| idea_id | tactic | outcome | rounds | final_claim |")
+    lines.append("|---|---|---|---|---|")
     for d in result.debates:
-        lines.append(f"| {d.idea_id} | {d.outcome} | {d.round_count} | {d.final_claim} |")
+        lines.append(f"| {d.idea_id} | {d.tactic} | {d.outcome} | {d.round_count} | {d.final_claim} |")
     lines.append("")
 
     lines.append("## 2. 최종 문서화 (통과된 아이디어만)\n")
@@ -206,14 +213,30 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
 
     lines.append("---\n")
     lines.append("## 내부 트레이스 (비공식, 문서화 대상 아님)\n")
-    lines.append("*아래는 폐기(discarded)되었거나 실무 단계에서 탈락(no-go)한 항목의 기록. "
-                  "디버깅용이며 최종 산출물에는 포함되지 않음.*\n")
+    lines.append("*discarded는 애초에 외부자문으로 전파되지 않아 논쟁 기록만 남는다. "
+                  "escalate까지 갔지만 실무 단계에서 no-go로 걸러진 건은 외부자문이 어떤 전공을 "
+                  "골랐는지까지 그대로 남긴다 — 디버깅/검토용이며 공식 산출물에는 포함되지 않음.*\n")
+
     documented_ids = {e["debate"].idea_id for e in result.documented}
+    escalated_but_filtered = [e for e in result.escalations if e["debate"].idea_id not in documented_ids]
+
+    for e in escalated_but_filtered:
+        d = e["debate"]
+        lines.append(f"### [{d.idea_id}] {d.final_claim} *(실무 단계 no-go로 최종 제외)*")
+        lines.append(f"- 논쟁 결과: {d.outcome} ({d.round_count}라운드)")
+        lines.append(f"- 외부 자문:\n\n{e['advisor']}\n")
+        lines.append("- 실무·보조 평가:")
+        lines.append("```json")
+        lines.append(json.dumps(e["practical"], ensure_ascii=False, indent=2))
+        lines.append("```")
+        lines.append("")
+
+    escalated_ids = {e["debate"].idea_id for e in result.escalations}
     for d in result.debates:
-        if d.idea_id in documented_ids:
+        if d.idea_id in escalated_ids:
             continue
-        reason = "discarded (디렉터가 물러남)" if d.outcome == "discarded" else "실무 단계 no-go"
-        lines.append(f"- `[{d.idea_id}]` {reason} / 최종 주장: {d.final_claim}")
+        lines.append(f"- `[{d.idea_id}]` discarded (디렉터가 물러남, 외부자문에 전파되지 않음) / "
+                      f"최종 주장: {d.final_claim}")
     lines.append("")
 
     return "\n".join(lines)
