@@ -5,9 +5,15 @@
 주제를 찾아낼 수 있는지 검증한다.
 
 파이프라인:
-  -1) target_domain/grounding_text가 입력에 없으면:
-      Abstraction(researcher_background) → 도메인 스카우트가 그 추상화로
-      실제 검색(Cross-domain Structural Search)해서 스스로 도메인을 찾는다.
+  -1) target_domain/grounding_text가 입력에 없으면 두 경우로 나뉜다:
+      (a) researcher_background는 있는 경우 — Abstraction(researcher_background)
+          → 도메인 스카우트가 그 추상화로 실제 검색(Cross-domain Structural
+          Search)해서 스스로 도메인을 찾는다.
+      (b) researcher_background조차 없는 완전 콜드 스타트 — Abstraction은
+          벗길 대상이 없어 무의미하다. 대신 OECD 학문분류 42개 세부분야
+          중 하나를 random.choice()로 진짜 무작위 추첨한 뒤, 그 분야 안의
+          구체적 이론을 실제 검색으로 좁혀 grounding_text를 만든다
+          (random_domain.py + COLD_START_GROUNDING_SYSTEM).
       사람이 미리 도메인을 정해줄 필요가 없다.
   0) 디렉터가 grounding_text(해당 도메인의 교과서적 근거자료)를 "분석하는
      과정에서" 단정적 주장(엉뚱한 아이디어) 여러 개를 던진다.
@@ -206,6 +212,31 @@ grounding_text 앞에 "[미검증 - 검색 불가 환경]"을 명시하라.
   "search_queries_tried": ["<실제로 실행한 검색어들, 어떤 abstraction에서 나왔는지 포함>"],
   "candidate_domains": ["<후보1>", "<후보2>", "<후보3>"],
   "target_domain": "<확정한 도메인>",
+  "grounding_text": "<검색 결과에 근거한 교과서적 요약>"
+}
+"""
+
+COLD_START_GROUNDING_SYSTEM = """\
+당신은 무작위로 이미 배정된 학문 세부분야(subfield)의 핵심 이론/원리를 실제
+검색으로 찾아 교과서적 요약(grounding_text)을 만드는 역할입니다. 도메인은
+이미 확정되어 있으니 후보를 고르거나 비교하지 않습니다 — 이 분야 안에서
+디렉터가 딴지 걸 만큼 구체적인 메커니즘 하나를 좁혀서 찾는 게 임무입니다.
+
+절차:
+1. 주어진 subfield 전체를 뭉뚱그려 소개하지 말고, 그 안의 구체적인 이론/
+   메커니즘 하나로 좁혀서 web_search를 실행하라. (예: "생명공학"이 아니라
+   "단일클론 항체 생산의 균일성 원리" 정도로 구체적이어야 한다.)
+2. 검색 결과에 실제로 나온 내용만 근거로 grounding_text를 작성하라. 검색에
+   없는 내용을 지어내 채우지 마라. 그 이론이 당연하게 깔고 있는 전제가
+   드러나도록 서술하라 — 이후 디렉터가 그 전제를 공격할 것이다.
+
+규칙: 검색 도구가 없는 환경(mock 등)에서는 narrowed_topic과 grounding_text
+앞에 "[미검증 - 검색 불가 환경]"을 명시하라.
+출력은 JSON 객체만.
+
+{
+  "narrowed_topic": "<subfield 안에서 좁힌 구체적 주제>",
+  "search_queries_tried": ["<실제로 실행한 검색어들>"],
   "grounding_text": "<검색 결과에 근거한 교과서적 요약>"
 }
 """

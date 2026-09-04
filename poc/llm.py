@@ -84,6 +84,21 @@ class LLM:
                 ensure_ascii=False,
             )
 
+        if '"narrowed_topic"' in system:
+            # COLD_START_GROUNDING_SYSTEM: researcher_background조차 없을 때.
+            # 실제로는 random_domain.py가 뽑은 subfield가 user에 들어있지만,
+            # mock에서는 검색을 안 하므로 내용은 결정론적 placeholder를 쓴다.
+            return json.dumps(
+                {
+                    "narrowed_topic": "[미검증 - 검색 불가 환경] mock 모드 placeholder 주제",
+                    "search_queries_tried": ["[미검증 - 검색 불가 환경] mock 모드에서는 실제 검색을 "
+                    "실행하지 않음"],
+                    "grounding_text": "[미검증 - 검색 불가 환경] random_domain.py가 뽑은 세부분야 안의 "
+                    "구체 이론을 실제 검색으로 채워야 하는 자리 (mock이라 비어 있음).",
+                },
+                ensure_ascii=False,
+            )
+
         if "search_queries_tried" in system:
             return json.dumps(
                 {
@@ -98,7 +113,9 @@ class LLM:
                 ensure_ascii=False,
             )
 
-        if "researcher_background" in user and "grounded_in" in system:
+        if "grounded_in" in system:
+            # DIRECTOR_SEED_SYSTEM. researcher_background가 아예 없는 완전
+            # 콜드 스타트 입력도 있으므로 그 필드 존재 여부로 분기하지 않는다.
             return json.dumps(
                 [
                     {
