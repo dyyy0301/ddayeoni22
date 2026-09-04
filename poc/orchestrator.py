@@ -20,6 +20,7 @@ from prompts import (
     DIRECTOR_DEBATE_SYSTEM,
     EXTERNAL_ADVISOR_SYSTEM,
     PRACTICAL_SYSTEM,
+    DOMAIN_SCOUT_SYSTEM,
 )
 
 DEFAULT_MAX_ROUNDS = 20
@@ -55,10 +56,19 @@ class DebateResult:
 
 @dataclass
 class RunResult:
+    scouted: dict = None  # 도메인 스카우트 결과 (target_domain/grounding_text가 입력에 없었을 때만 채워짐)
     seeds: list = field(default_factory=list)
     debates: list = field(default_factory=list)  # DebateResult
     escalations: list = field(default_factory=list)  # {"debate", "advisor", "practical"}
     documented: list = field(default_factory=list)  # subset of escalations that passed practical gate
+
+
+def scout_domain(problem: dict, llm: LLM) -> dict:
+    """target_domain/grounding_text가 없을 때, researcher_background만 보고
+    도메인 스카우트가 실제 검색(search=True)으로 낯선 도메인을 스스로 찾는다."""
+    user_input = json.dumps(problem, ensure_ascii=False, indent=2)
+    raw = llm.complete(DOMAIN_SCOUT_SYSTEM, user_input, temperature=0.7, search=True)
+    return _parse_json_object(raw)
 
 
 def generate_seed_ideas(problem: dict, llm: LLM) -> list:
@@ -151,13 +161,20 @@ def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
         ensure_ascii=False,
         indent=2,
     )
-    advisor = llm.complete(EXTERNAL_ADVISOR_SYSTEM, ctx, temperature=0.8)
+    advisor = llm.complete(EXTERNAL_ADVISOR_SYSTEM, ctx, temperature=0.8, search=True)
     practical = _parse_json_object(llm.complete(PRACTICAL_SYSTEM, ctx, temperature=0.2))
     return {"debate": debate, "advisor": advisor, "practical": practical}
 
 
 def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) -> RunResult:
     result = RunResult()
+
+    if not problem.get("target_domain") or not problem.get("grounding_text"):
+        scouted = scout_domain(problem, llm)
+        result.scouted = scouted
+        # in-place update so the caller's problem dict (used later for the report) sees it too
+        problem["target_domain"] = scouted["target_domain"]
+        problem["grounding_text"] = scouted["grounding_text"]
 
     seeds = generate_seed_ideas(problem, llm)
     result.seeds = seeds
@@ -181,6 +198,13 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
     lines.append(f"# 연구 주제 탐색 PoC: {problem.get('target_domain', '')}\n")
     lines.append(f"**연구자 배경(회피 대상)**: {problem.get('researcher_background', '')}")
     lines.append(f"**최대 논쟁 라운드**: {max_rounds}\n")
+
+    if result.scouted:
+        lines.append("## -1. 도메인 스카우트 (target_domain을 사람이 안 정해줘서 스스로 찾음)\n")
+        lines.append(f"- 구조 추출: {result.scouted.get('abstraction', '')}")
+        lines.append(f"- 시도한 검색어: {result.scouted.get('search_queries_tried', [])}")
+        lines.append(f"- 후보 도메인: {result.scouted.get('candidate_domains', [])}")
+        lines.append(f"- 확정된 도메인: **{result.scouted.get('target_domain', '')}**\n")
 
     lines.append("## 0. 디렉터가 던진 시드 아이디어\n")
     for s in result.seeds:
