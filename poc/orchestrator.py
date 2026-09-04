@@ -18,6 +18,7 @@ from prompts import (
     DIRECTOR_SEED_SYSTEM,
     THEORY_SYSTEM,
     DIRECTOR_DEBATE_SYSTEM,
+    ABSTRACTION_SYSTEM,
     EXTERNAL_ADVISOR_SYSTEM,
     PRACTICAL_SYSTEM,
     DOMAIN_SCOUT_SYSTEM,
@@ -63,12 +64,26 @@ class RunResult:
     documented: list = field(default_factory=list)  # subset of escalations that passed practical gate
 
 
+def abstract_problem(text: str, llm: LLM) -> list:
+    """도메인 스카우트/외부자문이 공유하는 단일 책임 컴포넌트.
+    검색/판단 없이, 서로 다른 두 각도로 구조만 추상화해서 돌려준다.
+    나쁜 추상화가 나와도 이 단계만 다시 돌리면 되고, 뒤이은 검색을
+    낭비하지 않는다."""
+    user_input = json.dumps({"text": text}, ensure_ascii=False, indent=2)
+    raw = llm.complete(ABSTRACTION_SYSTEM, user_input, temperature=0.6)
+    return _parse_json_array(raw)
+
+
 def scout_domain(problem: dict, llm: LLM) -> dict:
-    """target_domain/grounding_text가 없을 때, researcher_background만 보고
-    도메인 스카우트가 실제 검색(search=True)으로 낯선 도메인을 스스로 찾는다."""
-    user_input = json.dumps(problem, ensure_ascii=False, indent=2)
-    raw = llm.complete(DOMAIN_SCOUT_SYSTEM, user_input, temperature=0.7, search=True)
-    return _parse_json_object(raw)
+    """target_domain/grounding_text가 없을 때, researcher_background를 먼저
+    abstract_problem으로 추상화한 뒤, 그 추상화로 도메인 스카우트가 실제
+    검색(search=True)해서 낯선 도메인을 스스로 찾는다."""
+    abstractions = abstract_problem(problem.get("researcher_background", ""), llm)
+    ctx = json.dumps({**problem, "abstractions": abstractions}, ensure_ascii=False, indent=2)
+    raw = llm.complete(DOMAIN_SCOUT_SYSTEM, ctx, temperature=0.7, search=True)
+    result = _parse_json_object(raw)
+    result["abstractions"] = abstractions
+    return result
 
 
 def generate_seed_ideas(problem: dict, llm: LLM) -> list:
@@ -150,6 +165,9 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
 
 
 def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
+    # 먼저 논쟁에서 살아남은 final_claim을 별도로 추상화한다 (외부자문 프롬프트
+    # 안에 섞어서 시키지 않는다 — 나쁜 추상화면 검색 전에 걸러내야 하므로).
+    abstractions = abstract_problem(debate.final_claim, llm)
     ctx = json.dumps(
         {
             "problem": problem,
@@ -157,13 +175,14 @@ def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
             "final_claim": debate.final_claim,
             "outcome": debate.outcome,
             "round_count": debate.round_count,
+            "abstractions": abstractions,
         },
         ensure_ascii=False,
         indent=2,
     )
     advisor = llm.complete(EXTERNAL_ADVISOR_SYSTEM, ctx, temperature=0.8, search=True)
     practical = _parse_json_object(llm.complete(PRACTICAL_SYSTEM, ctx, temperature=0.2))
-    return {"debate": debate, "advisor": advisor, "practical": practical}
+    return {"debate": debate, "abstractions": abstractions, "advisor": advisor, "practical": practical}
 
 
 def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) -> RunResult:
@@ -201,7 +220,9 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
 
     if result.scouted:
         lines.append("## -1. 도메인 스카우트 (target_domain을 사람이 안 정해줘서 스스로 찾음)\n")
-        lines.append(f"- 구조 추출: {result.scouted.get('abstraction', '')}")
+        lines.append("- 구조 추출 (다각도, 별도 Abstraction 단계):")
+        for a in result.scouted.get("abstractions", []):
+            lines.append(f"  - `[{a.get('angle', '')}]` {a.get('abstraction', '')}")
         lines.append(f"- 시도한 검색어: {result.scouted.get('search_queries_tried', [])}")
         lines.append(f"- 후보 도메인: {result.scouted.get('candidate_domains', [])}")
         lines.append(f"- 확정된 도메인: **{result.scouted.get('target_domain', '')}**\n")
@@ -228,6 +249,9 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
         d = e["debate"]
         lines.append(f"### [{d.idea_id}] {d.final_claim}")
         lines.append(f"- 논쟁 결과: {d.outcome} ({d.round_count}라운드)")
+        lines.append("- 구조 추출 (다각도, 별도 Abstraction 단계):")
+        for a in e.get("abstractions", []):
+            lines.append(f"  - `[{a.get('angle', '')}]` {a.get('abstraction', '')}")
         lines.append(f"- 외부 자문:\n\n{e['advisor']}\n")
         lines.append("- 실무·보조 평가:")
         lines.append("```json")

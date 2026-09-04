@@ -66,11 +66,27 @@ class LLM:
     def _mock_response(self, system: str, user: str, search: bool = False) -> str:
         idea_id = self._idea_id(user)
 
+        if '"angle"' in system:
+            # ABSTRACTION_SYSTEM: 검색/판단 없이 순수 구조 추상화만. scout든
+            # advisor든 입력 텍스트와 무관하게 mock에서는 결정론적 2각도를 준다.
+            return json.dumps(
+                [
+                    {
+                        "angle": "관측-추정 구조",
+                        "abstraction": "[MOCK] 국소적으로 관측한 신호만으로 전역 상태를 추정하는 문제",
+                    },
+                    {
+                        "angle": "정보 전파 구조",
+                        "abstraction": "[MOCK] 개별 노드 간 신호 교환을 통해 정보가 집단적으로 전파·"
+                        "수렴하는 구조",
+                    },
+                ],
+                ensure_ascii=False,
+            )
+
         if "search_queries_tried" in system:
             return json.dumps(
                 {
-                    "abstraction": "[미검증 - 검색 불가 환경] 절대 좌표 없이, 이웃 개체와의 국소 신호"
-                    "만으로 전역 목적 상태에 수렴하는 분산 추정 문제",
                     "search_queries_tried": ["[미검증 - 검색 불가 환경] mock 모드에서는 실제 검색을 "
                     "실행하지 않음"],
                     "candidate_domains": ["[미검증] 생태학", "[미검증] 사회연결망 이론", "[미검증] 통계역학"],
@@ -160,9 +176,8 @@ class LLM:
             if idea_id == "i1":
                 return (
                     "[MOCK idea_id=i1]\n"
-                    "[Problem Abstraction] 전역 좌표 없이 국소 신호 강도 비교만으로 목적 상태에 "
-                    "수렴하는 분산 합의 문제.\n"
-                    f"[Cross-domain Structural Search] {disclosed}시도한 검색어: "
+                    f"[Cross-domain Structural Search] 사용한 abstraction: '국소적으로 관측한 신호만으로 "
+                    f"전역 상태를 추정하는 문제' / {disclosed}시도한 검색어: "
                     "'local interaction consensus without global coordinates' / "
                     "후보 1) 물리학 - 통계역학의 스핀 정렬(이징 모델) "
                     "2) 사회학 - 사회연결망의 여론 수렴(threshold consensus dynamics) "
@@ -179,9 +194,8 @@ class LLM:
                 )
             return (
                 "[MOCK idea_id=i3]\n"
-                "[Problem Abstraction] 중계 노드 수 증가에 따른 상관 잡음 누적이 신호 복원 가능성을 "
-                "붕괴시키는 문제.\n"
-                f"[Cross-domain Structural Search] {disclosed}시도한 검색어: "
+                f"[Cross-domain Structural Search] 사용한 abstraction: '개별 노드 간 신호 교환을 통해 "
+                f"정보가 집단적으로 전파·수렴하는 구조' / {disclosed}시도한 검색어: "
                 "'correlated noise breaks relay network capacity at scale' / "
                 "후보 1) 통신공학 - 다중경로 페이딩과 중계망 용량 이론 "
                 "2) 생태학 - 개체군 밀도 증가에 따른 자원 경쟁/혼잡 효과 "
