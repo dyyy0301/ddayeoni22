@@ -251,6 +251,7 @@ class LLM:
                         "verdict": "no-go",
                         "reasoning": "[MOCK] 상관 잡음 붕괴 조건을 검증할 실측 데이터/벤치마크가 없고, "
                         "20라운드 넘게 이론과 합의도 안 됐다. 지금 단계에서 착수하기엔 리스크가 크다.",
+                        "implementation_plan": None,
                     },
                     ensure_ascii=False,
                 )
@@ -265,6 +266,16 @@ class LLM:
                     "verdict": "go",
                     "reasoning": "[MOCK] 협력 측위 이론과 여론 동역학 시뮬레이션 벤치마크가 이미 있어 "
                     "착수 부담이 낮다.",
+                    "implementation_plan": {
+                        "toy_design": "[MOCK] 실제 통신 반경 대신 2D 격자 위 노드 100개로 축소하고, "
+                        "절대좌표 없이 이웃 신호 강도 비교만으로 합의에 도달하는지 시뮬레이션",
+                        "tools": ["NetworkX", "NumPy", "Matplotlib"],
+                        "milestones": [
+                            "[MOCK] 100노드 2D 격자 시뮬레이터 뼈대 작성 (NetworkX 그래프 + 무작위 배치)",
+                            "[MOCK] 문턱값 합의 규칙(threshold consensus) 구현 후 수렴 여부 확인",
+                            "[MOCK] 노드 밀도를 바꿔가며 수렴 임계점 측정, Matplotlib으로 상전이 곡선 시각화",
+                        ],
+                    },
                 },
                 ensure_ascii=False,
             )
