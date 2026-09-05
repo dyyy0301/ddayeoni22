@@ -184,7 +184,25 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
     )
 
 
-def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
+def verify_transfer(debate: DebateResult, advisor_text: str, problem: dict, llm: LLM, max_rounds: int) -> DebateResult:
+    """외부자문이 제안한 타 분야 이식을 그냥 통과시키지 않는다. 이론 에이전트는
+    타 분야(예: 물류공학) 전문가가 아니라 여전히 원 도메인 전문가일 뿐이므로,
+    "그 타 분야 이론이 옳은가"가 아니라 "이 이식이 원 도메인이 이미 아는 제약과
+    충돌하는가"를 심사하게 만든다. run_debate()를 그대로 재사용한다 — 외부자문의
+    이식 제안을 새로운 claim으로 취급해 같은 이론<->디렉터 논쟁 루프에 태우고,
+    디렉터가 그 이식을 방어한다."""
+    transfer_idea = {
+        "idea_id": f"{debate.idea_id}-transfer",
+        "mode": "devils_advocate",
+        "tactic": "cross_domain_transfer_check",
+        "claim": advisor_text,
+        "grounded_in": debate.final_claim,
+    }
+    # 원래 논쟁보다 짧게 — 여긴 심층 토론이 아니라 상식 충돌 여부만 보는 체크다.
+    return run_debate(transfer_idea, problem, llm, min(max_rounds, 6))
+
+
+def escalate(debate: DebateResult, problem: dict, llm: LLM, max_rounds: int) -> dict:
     # 먼저 논쟁에서 살아남은 final_claim을 별도로 추상화한다 (외부자문 프롬프트
     # 안에 섞어서 시키지 않는다 — 나쁜 추상화면 검색 전에 걸러내야 하므로).
     abstractions = abstract_problem(debate.final_claim, llm)
@@ -201,8 +219,27 @@ def escalate(debate: DebateResult, problem: dict, llm: LLM) -> dict:
         indent=2,
     )
     advisor = llm.complete(EXTERNAL_ADVISOR_SYSTEM, ctx, temperature=0.8, search=True)
+
+    transfer_check = verify_transfer(debate, advisor, problem, llm, max_rounds)
+    if transfer_check.outcome == "discarded":
+        # 디렉터조차 이 이식을 원 도메인 상식 앞에서 방어 못 했다 -> 실무 게이트로
+        # 보내지 않는다. no-go로 착수 계획을 짜는 건 시간 낭비다.
+        return {
+            "debate": debate,
+            "abstractions": abstractions,
+            "advisor": advisor,
+            "transfer_check": transfer_check,
+            "practical": None,
+        }
+
     practical = _parse_json_object(llm.complete(PRACTICAL_SYSTEM, ctx, temperature=0.2))
-    return {"debate": debate, "abstractions": abstractions, "advisor": advisor, "practical": practical}
+    return {
+        "debate": debate,
+        "abstractions": abstractions,
+        "advisor": advisor,
+        "transfer_check": transfer_check,
+        "practical": practical,
+    }
 
 
 def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) -> RunResult:
@@ -229,9 +266,9 @@ def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) 
 
     for debate in result.debates:
         if debate.outcome in ("passed", "deadlocked"):
-            escalation = escalate(debate, problem, llm)
+            escalation = escalate(debate, problem, llm, max_rounds)
             result.escalations.append(escalation)
-            if escalation["practical"]["verdict"] != "no-go":
+            if escalation["practical"] is not None and escalation["practical"]["verdict"] != "no-go":
                 result.documented.append(escalation)
 
     return result
@@ -283,12 +320,16 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
         lines.append("*이번 실행에서는 최종 문서화 기준을 통과한 아이디어가 없음.*\n")
     for e in result.documented:
         d = e["debate"]
+        tc = e.get("transfer_check")
         lines.append(f"### [{d.idea_id}] {d.final_claim}")
         lines.append(f"- 논쟁 결과: {d.outcome} ({d.round_count}라운드)")
         lines.append("- 구조 추출 (다각도, 별도 Abstraction 단계):")
         for a in e.get("abstractions", []):
             lines.append(f"  - `[{a.get('angle', '')}]` {a.get('abstraction', '')}")
         lines.append(f"- 외부 자문:\n\n{e['advisor']}\n")
+        if tc:
+            lines.append(f"- 이식 검증(원 도메인 상식 충돌 여부, {tc.round_count}라운드): "
+                          f"**{tc.outcome}** — {tc.final_claim[:200]}{'...' if len(tc.final_claim) > 200 else ''}")
         lines.append("- 실무·보조 평가:")
         lines.append("```json")
         lines.append(json.dumps(e["practical"], ensure_ascii=False, indent=2))
@@ -306,13 +347,19 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
 
     for e in escalated_but_filtered:
         d = e["debate"]
-        lines.append(f"### [{d.idea_id}] {d.final_claim} *(실무 단계 no-go로 최종 제외)*")
+        tc = e.get("transfer_check")
+        reason = "이식 검증 실패로 실무 게이트 자체를 안 감" if e["practical"] is None else "실무 단계 no-go로 최종 제외"
+        lines.append(f"### [{d.idea_id}] {d.final_claim} *({reason})*")
         lines.append(f"- 논쟁 결과: {d.outcome} ({d.round_count}라운드)")
         lines.append(f"- 외부 자문:\n\n{e['advisor']}\n")
-        lines.append("- 실무·보조 평가:")
-        lines.append("```json")
-        lines.append(json.dumps(e["practical"], ensure_ascii=False, indent=2))
-        lines.append("```")
+        if tc:
+            lines.append(f"- 이식 검증(원 도메인 상식 충돌 여부, {tc.round_count}라운드): "
+                          f"**{tc.outcome}** — {tc.final_claim[:200]}{'...' if len(tc.final_claim) > 200 else ''}")
+        if e["practical"] is not None:
+            lines.append("- 실무·보조 평가:")
+            lines.append("```json")
+            lines.append(json.dumps(e["practical"], ensure_ascii=False, indent=2))
+            lines.append("```")
         lines.append("")
 
     escalated_ids = {e["debate"].idea_id for e in result.escalations}

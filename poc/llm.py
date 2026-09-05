@@ -158,6 +158,18 @@ class LLM:
             )
 
         if '"stance": "reject"' in system:
+            if idea_id.endswith("-transfer"):
+                if idea_id == "i1-transfer":
+                    return json.dumps(
+                        {"stance": "concede", "argument": "[MOCK] 이 이식이 원 도메인의 알려진 제약과 "
+                         "충돌하지 않는다. 더 반박할 논리가 없다."},
+                        ensure_ascii=False,
+                    )
+                return json.dumps(
+                    {"stance": "reject", "argument": "[MOCK] 이 이식이 원 도메인에서 실제로 성립하려면 "
+                     "검증되지 않은 전제가 필요해 보인다."},
+                    ensure_ascii=False,
+                )
             if idea_id == "i1":
                 return json.dumps(
                     {"stance": "concede", "argument": "[MOCK] 절대 좌표 없이 국소 신호 비교만으로 "
@@ -180,6 +192,13 @@ class LLM:
             )
 
         if '"stance": "counter"' in system:
+            if idea_id.endswith("-transfer"):
+                # i3-transfer: 디렉터도 방어 못 하고 물러남 -> 실무 게이트 자체를 안 감
+                return json.dumps(
+                    {"stance": "concede", "argument": "[MOCK] 맞다 — 검증되지 않은 전제 없이는 이 이식이 "
+                     "성립한다고 방어할 수 없다."},
+                    ensure_ascii=False,
+                )
             if idea_id == "i2":
                 return json.dumps(
                     {"stance": "concede", "argument": "[MOCK] trust-weighted consensus로 이미 다뤄진다는 "
