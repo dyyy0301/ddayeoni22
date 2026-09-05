@@ -85,8 +85,8 @@ class LLM:
             )
 
         if '"narrowed_topic"' in system:
-            # COLD_START_GROUNDING_SYSTEM: researcher_background조차 없을 때.
-            # 실제로는 random_domain.py가 뽑은 subfield가 user에 들어있지만,
+            # COLD_START_GROUNDING_SYSTEM: 실제로는 random_domain.py가 뽑은
+            # subfield가 user에 들어있지만,
             # mock에서는 검색을 안 하므로 내용은 결정론적 placeholder를 쓴다.
             return json.dumps(
                 {
@@ -99,23 +99,8 @@ class LLM:
                 ensure_ascii=False,
             )
 
-        if "search_queries_tried" in system:
-            return json.dumps(
-                {
-                    "search_queries_tried": ["[미검증 - 검색 불가 환경] mock 모드에서는 실제 검색을 "
-                    "실행하지 않음"],
-                    "candidate_domains": ["[미검증] 생태학", "[미검증] 사회연결망 이론", "[미검증] 통계역학"],
-                    "target_domain": "[미검증 - 검색 불가 환경] 곤충 사회성 군집의 분산 탐색(collective "
-                    "foraging) 이론",
-                    "grounding_text": "[미검증 - 검색 불가 환경] 개미 군집은 개별 개체가 전역 지도 없이도 "
-                    "페로몬 농도 구배만으로 먹이원까지 경로를 집단적으로 수렴시킨다.",
-                },
-                ensure_ascii=False,
-            )
-
         if "grounded_in" in system:
-            # DIRECTOR_SEED_SYSTEM. researcher_background가 아예 없는 완전
-            # 콜드 스타트 입력도 있으므로 그 필드 존재 여부로 분기하지 않는다.
+            # DIRECTOR_SEED_SYSTEM.
             return json.dumps(
                 [
                     {

@@ -21,7 +21,6 @@ from prompts import (
     ABSTRACTION_SYSTEM,
     EXTERNAL_ADVISOR_SYSTEM,
     PRACTICAL_SYSTEM,
-    DOMAIN_SCOUT_SYSTEM,
     COLD_START_GROUNDING_SYSTEM,
 )
 from random_domain import draw_random_field
@@ -60,7 +59,7 @@ class DebateResult:
 
 @dataclass
 class RunResult:
-    scouted: dict = None  # 도메인 스카우트 결과 (target_domain/grounding_text가 입력에 없었을 때만 채워짐)
+    scouted: dict = None  # 콜드 스타트 결과 (target_domain/grounding_text가 입력에 없었을 때만 채워짐)
     seeds: list = field(default_factory=list)
     debates: list = field(default_factory=list)  # DebateResult
     escalations: list = field(default_factory=list)  # {"debate", "advisor", "practical"}
@@ -68,38 +67,24 @@ class RunResult:
 
 
 def abstract_problem(text: str, llm: LLM) -> list:
-    """도메인 스카우트/외부자문이 공유하는 단일 책임 컴포넌트.
-    검색/판단 없이, 서로 다른 두 각도로 구조만 추상화해서 돌려준다.
-    나쁜 추상화가 나와도 이 단계만 다시 돌리면 되고, 뒤이은 검색을
-    낭비하지 않는다."""
+    """외부자문이 사용하는 단일 책임 컴포넌트. 검색/판단 없이, 서로 다른
+    두 각도로 구조만 추상화해서 돌려준다. 나쁜 추상화가 나와도 이 단계만
+    다시 돌리면 되고, 뒤이은 검색을 낭비하지 않는다."""
     user_input = json.dumps({"text": text}, ensure_ascii=False, indent=2)
     raw = llm.complete(ABSTRACTION_SYSTEM, user_input, temperature=0.6)
     return _parse_json_array(raw)
 
 
 def cold_start_domain(llm: LLM) -> dict:
-    """researcher_background조차 없는 완전 콜드 스타트. Abstraction은 벗길
-    대상이 없어 무의미하므로 건너뛰고, 진짜 외부 무작위 소스(OECD 학문분류)에서
-    세부분야를 뽑은 뒤 그 안의 구체 이론을 실제 검색으로 좁혀 grounding_text를
-    만든다."""
+    """도메인이 안 정해졌을 때 유일한 경로. 진짜 외부 무작위 소스(OECD
+    학문분류)에서 세부분야를 뽑은 뒤 그 안의 구체 이론을 실제 검색으로
+    좁혀 grounding_text를 만든다."""
     field = draw_random_field()
     ctx = json.dumps(field, ensure_ascii=False, indent=2)
     raw = llm.complete(COLD_START_GROUNDING_SYSTEM, ctx, temperature=0.6, search=True)
     result = _parse_json_object(raw)
     result["random_draw"] = field
     result["target_domain"] = f"{result.get('narrowed_topic', field['subfield'])} ({field['broad_field']})"
-    return result
-
-
-def scout_domain(problem: dict, llm: LLM) -> dict:
-    """target_domain/grounding_text가 없을 때, researcher_background를 먼저
-    abstract_problem으로 추상화한 뒤, 그 추상화로 도메인 스카우트가 실제
-    검색(search=True)해서 낯선 도메인을 스스로 찾는다."""
-    abstractions = abstract_problem(problem.get("researcher_background", ""), llm)
-    ctx = json.dumps({**problem, "abstractions": abstractions}, ensure_ascii=False, indent=2)
-    raw = llm.complete(DOMAIN_SCOUT_SYSTEM, ctx, temperature=0.7, search=True)
-    result = _parse_json_object(raw)
-    result["abstractions"] = abstractions
     return result
 
 
@@ -246,12 +231,7 @@ def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) 
     result = RunResult()
 
     if not problem.get("target_domain") or not problem.get("grounding_text"):
-        if problem.get("researcher_background"):
-            scouted = scout_domain(problem, llm)
-        else:
-            # researcher_background조차 없는 완전 콜드 스타트 -> Abstraction
-            # 건너뛰고 진짜 무작위 소스(OECD 학문분류)에서 도메인을 뽑는다.
-            scouted = cold_start_domain(llm)
+        scouted = cold_start_domain(llm)
         result.scouted = scouted
         # in-place update so the caller's problem dict (used later for the report) sees it too
         problem["target_domain"] = scouted["target_domain"]
@@ -277,26 +257,16 @@ def run_pipeline(problem: dict, llm: LLM, max_rounds: int = DEFAULT_MAX_ROUNDS) 
 def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
     lines = []
     lines.append(f"# 연구 주제 탐색 PoC: {problem.get('target_domain', '')}\n")
-    lines.append(f"**연구자 배경(회피 대상)**: {problem.get('researcher_background', '')}")
     lines.append(f"**최대 논쟁 라운드**: {max_rounds}\n")
 
     if result.scouted:
-        if "random_draw" in result.scouted:
-            lines.append("## -1. 완전 콜드 스타트 (researcher_background도 없어서 진짜 무작위 추첨)\n")
-            rd = result.scouted["random_draw"]
-            lines.append(f"- 무작위 추첨(OECD 학문분류, random.choice): "
-                          f"**{rd['subfield']}** ({rd['broad_field']} 계열)")
-            lines.append(f"- 그 안에서 검색으로 좁힌 구체 주제: {result.scouted.get('narrowed_topic', '')}")
-            lines.append(f"- 시도한 검색어: {result.scouted.get('search_queries_tried', [])}")
-            lines.append(f"- 확정된 도메인: **{result.scouted.get('target_domain', '')}**\n")
-        else:
-            lines.append("## -1. 도메인 스카우트 (target_domain을 사람이 안 정해줘서 스스로 찾음)\n")
-            lines.append("- 구조 추출 (다각도, 별도 Abstraction 단계):")
-            for a in result.scouted.get("abstractions", []):
-                lines.append(f"  - `[{a.get('angle', '')}]` {a.get('abstraction', '')}")
-            lines.append(f"- 시도한 검색어: {result.scouted.get('search_queries_tried', [])}")
-            lines.append(f"- 후보 도메인: {result.scouted.get('candidate_domains', [])}")
-            lines.append(f"- 확정된 도메인: **{result.scouted.get('target_domain', '')}**\n")
+        lines.append("## -1. 콜드 스타트 (도메인을 사람이 안 정해줘서 진짜 무작위 추첨)\n")
+        rd = result.scouted["random_draw"]
+        lines.append(f"- 무작위 추첨(OECD 학문분류, random.choice): "
+                      f"**{rd['subfield']}** ({rd['broad_field']} 계열)")
+        lines.append(f"- 그 안에서 검색으로 좁힌 구체 주제: {result.scouted.get('narrowed_topic', '')}")
+        lines.append(f"- 시도한 검색어: {result.scouted.get('search_queries_tried', [])}")
+        lines.append(f"- 확정된 도메인: **{result.scouted.get('target_domain', '')}**\n")
 
     lines.append("## 0. 디렉터가 던진 시드 아이디어\n")
     for s in result.seeds:

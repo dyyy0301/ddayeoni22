@@ -1,5 +1,4 @@
 {
-  "researcher_background": "위성항법(PNT) 및 신호처리 전공, GNSS 측위 연구 다년간 수행. 이 배경/용어/프레임을 새 아이디어에 절대 끌어오지 말 것.",
   "target_domain": "산불 확산의 침투 이론(percolation theory) 모형",
   "grounding_text": "산불이 숲 전체로 번지는지 여부는 개별 나무의 발화 온도가 아니라, 나무들이 얼마나 촘촘하게 연결되어 있는지에 좌우된다. 격자 위에 나무를 무작위로 채워 넣는 침투 이론(percolation theory) 모형에서는, 나무 밀도가 특정 임계값(침투 임계점, percolation threshold)을 넘는 순간 국소적인 발화가 격자 전체를 가로지르는 거대 연결 성분(percolating cluster)으로 갑자기 확산된다. 이 전이는 연속적이지 않고, 임계점 부근에서 급격한 상전이(phase transition) 형태로 나타난다. 개별 나무의 특성(수분 함량, 종 등)은 이 전역적 확산 여부에는 거의 영향을 주지 못하며, 오직 연결 밀도만이 확산 여부를 결정한다.",
   "max_rounds": 20
