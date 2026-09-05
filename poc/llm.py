@@ -120,6 +120,7 @@ class LLM:
                 [
                     {
                         "idea_id": "i1",
+                        "mode": "devils_advocate",
                         "tactic": "free_from_evidence",
                         "claim": "[MOCK] '위치 계산'이라는 개념 자체를 폐기해야 한다. 개체는 절대 좌표를 "
                         "따질 필요 없이, 순전히 이웃과의 국소 신호 강도 비교만으로 목적 상태에 "
@@ -128,6 +129,7 @@ class LLM:
                     },
                     {
                         "idea_id": "i2",
+                        "mode": "devils_advocate",
                         "tactic": "naive_assumption_attack",
                         "claim": "[MOCK] 이 이론은 '신호를 중계하는 개체가 항상 정직하게 신호를 전달한다'는 "
                         "순진한 가정을 깔고 있다. 신호가 강한 개체가 거짓 신호를 흘려도 걸러낼 방법이 "
@@ -136,11 +138,20 @@ class LLM:
                     },
                     {
                         "idea_id": "i3",
+                        "mode": "devils_advocate",
                         "tactic": "extreme_stress_test",
                         "claim": "[MOCK] 중계 개체 수가 100배로 폭증해서 신호가 완전히 뒤섞이는 극한 "
                         "상황이 오면, 국소 신호 구배 자체가 노이즈에 파묻혀 이 이론은 통째로 무너진다. "
                         "그런데 교과서는 그런 상황을 단 한 줄도 언급하지 않는다.",
                         "grounded_in": "군집의 상대 위상 유지 메커니즘",
+                    },
+                    {
+                        "idea_id": "i4",
+                        "mode": "naive_curiosity",
+                        "tactic": "naive_wonder",
+                        "claim": "[MOCK] 근데 페로몬 신호는 왜 하필 시간이 지나면 흐려지는 걸까? 흐려지지 "
+                        "않는 신호를 쓰면 안 되는 이유가 뭘까?",
+                        "grounded_in": "페로몬 농도 기반 분산 탐색 원리",
                     },
                 ],
                 ensure_ascii=False,

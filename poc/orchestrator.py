@@ -48,6 +48,7 @@ def _parse_json_object(text: str):
 @dataclass
 class DebateResult:
     idea_id: str
+    mode: str  # devils_advocate | naive_curiosity
     tactic: str
     seed_claim: str
     grounded_in: str
@@ -129,6 +130,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
         if theory_resp["stance"] == "concede":
             return DebateResult(
                 idea_id=idea["idea_id"],
+                mode=idea.get("mode", ""),
                 tactic=idea.get("tactic", ""),
                 seed_claim=idea["claim"],
                 grounded_in=idea.get("grounded_in", ""),
@@ -157,6 +159,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
         if director_resp["stance"] == "concede":
             return DebateResult(
                 idea_id=idea["idea_id"],
+                mode=idea.get("mode", ""),
                 tactic=idea.get("tactic", ""),
                 seed_claim=idea["claim"],
                 grounded_in=idea.get("grounded_in", ""),
@@ -170,6 +173,7 @@ def run_debate(idea: dict, problem: dict, llm: LLM, max_rounds: int) -> DebateRe
 
     return DebateResult(
         idea_id=idea["idea_id"],
+        mode=idea.get("mode", ""),
         tactic=idea.get("tactic", ""),
         seed_claim=idea["claim"],
         grounded_in=idea.get("grounded_in", ""),
@@ -259,17 +263,19 @@ def to_markdown(problem: dict, result: RunResult, max_rounds: int) -> str:
 
     lines.append("## 0. 디렉터가 던진 시드 아이디어\n")
     for s in result.seeds:
+        mode_label = "호기심천국" if s.get("mode") == "naive_curiosity" else "딴지"
         lines.append(
-            f"- `[{s['idea_id']}/{s.get('tactic', '')}]` {s['claim']} "
-            f"*(물어뜯은 지점: {s.get('grounded_in', '')})*"
+            f"- `[{s['idea_id']}/{mode_label}/{s.get('tactic', '')}]` {s['claim']} "
+            f"*(물어뜯은/캐물은 지점: {s.get('grounded_in', '')})*"
         )
     lines.append("")
 
     lines.append("## 1. 논쟁 결과 요약\n")
-    lines.append("| idea_id | tactic | outcome | rounds | final_claim |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| idea_id | mode | tactic | outcome | rounds | final_claim |")
+    lines.append("|---|---|---|---|---|---|")
     for d in result.debates:
-        lines.append(f"| {d.idea_id} | {d.tactic} | {d.outcome} | {d.round_count} | {d.final_claim} |")
+        mode_label = "호기심천국" if d.mode == "naive_curiosity" else "딴지"
+        lines.append(f"| {d.idea_id} | {mode_label} | {d.tactic} | {d.outcome} | {d.round_count} | {d.final_claim} |")
     lines.append("")
 
     lines.append("## 2. 최종 문서화 (통과된 아이디어만)\n")
