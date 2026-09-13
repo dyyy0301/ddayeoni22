@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__Notion__*",
+      "mcp__Claude_Code_Remote__*",
+      "WebSearch",
+      "WebFetch"
+    ]
+  }
+}
